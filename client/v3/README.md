@@ -81,7 +81,7 @@ The etcd client optionally exposes RPC metrics through [go-grpc-prometheus](http
 
 ## Namespacing
 
-The [namespace](https://godoc.org/go.etcd.io/etcd/clientv3/namespace) package provides `clientv3` interface wrappers to transparently isolate client requests to a user-defined prefix.
+The [namespace](https://godoc.org/go.etcd.io/etcd/client/v3/namespace) package provides `clientv3` interface wrappers to transparently isolate client requests to a user-defined prefix.
 
 ## Request size limit
 
@@ -89,4 +89,4 @@ Client request size limit is configurable via `clientv3.Config.MaxCallSendMsgSiz
 
 ## Examples
 
-More code examples can be found at [GoDoc](https://godoc.org/go.etcd.io/etcd/clientv3).
+More code [examples](https://github.com/etcd-io/etcd/tree/master/tests/integration/clientv3/examples) can be found at [GoDoc](https://pkg.go.dev/go.etcd.io/etcd/client/v3).
