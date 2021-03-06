@@ -143,10 +143,10 @@ function run {
   fi
 
   log_cmd "% ${repro}"
-  "${@}" 2> >(while read -r line; do echo -e "stderr: ${COLOR_MAGENTA}${line}${COLOR_NONE}" >&2; done)
+  "${@}" 2> >(while read -r line; do echo -e "${COLOR_NONE}stderr: ${COLOR_MAGENTA}${line}${COLOR_NONE}">&2; done)
   local error_code=$?
   if [ ${error_code} -ne 0 ]; then
-    log_error -e "FAIL: (code:${error_code}):\n  % ${repro}"
+    log_error -e "FAIL: (code:${error_code}):\\n  % ${repro}"
     return ${error_code}
   fi
 }
@@ -170,7 +170,7 @@ function module_dirs() {
 # maybe_run [cmd...] runs given command depending on the DRY_RUN flag.
 function maybe_run() {
   if ${DRY_RUN}; then
-    log_warning -e "# DRY_RUN:\n  % ${*}"
+    log_warning -e "# DRY_RUN:\\n  % ${*}"
   else
     run "${@}"
   fi
@@ -201,7 +201,7 @@ function modules_exp() {
 #  (unless the set is limited using ${PKG} or / ${USERMOD})
 function run_for_modules {
   local pkg="${PKG:-./...}"
-  if [ -z "${USERMOD}" ]; then
+  if [ -z "${USERMOD:-}" ]; then
     for m in $(module_dirs); do
       run_for_module "${m}" "$@" "${pkg}" || return "$?"
     done
@@ -280,7 +280,7 @@ function go_test {
   done
 
   if [ -n "${failures[*]}" ] ; then
-    log_error -e "ERROR: Tests for following packages failed:\n  ${failures[*]}"
+    log_error -e "ERROR: Tests for following packages failed:\\n  ${failures[*]}"
     return 2
   fi
 }
@@ -355,7 +355,9 @@ function assert_no_git_modifications {
 #  - no differencing commits in relation to the origin/$branch
 function git_assert_branch_in_sync {
   local branch
-  branch=$(git branch --show-current)
+  branch=$(run git rev-parse --abbrev-ref HEAD)
+  # TODO: When git 2.22 popular, change to:
+  # branch=$(git branch --show-current)
   if [[ $(run git status --porcelain --untracked-files=no) ]]; then
     log_error "The workspace in '$(pwd)' for branch: ${branch} has uncommitted changes"
     log_error "Consider cleaning up / renaming this directory or (cd $(pwd) && git reset --hard)"

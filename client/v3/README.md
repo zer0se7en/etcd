@@ -55,7 +55,7 @@ For full compatibility, it is recommended to install released versions of client
 etcd client returns 2 types of errors:
 
 1. context error: canceled or deadline exceeded.
-2. gRPC error: see [api/v3rpc/rpctypes](https://godoc.org/go.etcd.io/etcd/etcdserver/api/v3rpc/rpctypes).
+2. gRPC error: see [api/v3rpc/rpctypes](https://godoc.org/go.etcd.io/etcd/api/v3rpc/rpctypes).
 
 Here is the example code to handle client errors:
 
@@ -77,7 +77,7 @@ if err != nil {
 
 ## Metrics
 
-The etcd client optionally exposes RPC metrics through [go-grpc-prometheus](https://github.com/grpc-ecosystem/go-grpc-prometheus). See the [examples](https://github.com/etcd-io/etcd/blob/master/clientv3/example_metrics_test.go).
+The etcd client optionally exposes RPC metrics through [go-grpc-prometheus](https://github.com/grpc-ecosystem/go-grpc-prometheus). See the [examples](https://github.com/etcd-io/etcd/blob/master/tests/integration/clientv3/examples/example_metrics_test.go).
 
 ## Namespacing
 

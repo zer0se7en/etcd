@@ -54,9 +54,6 @@ if [ -z "$GOARCH" ]; then
   GOARCH=$(go env GOARCH);
 fi
 
-# determine the number of CPUs to use for Go tests
-CPU=${CPU:-"4"}
-
 # determine whether target supports race detection
 if [ -z "${RACE}" ] ; then
   if [ "$GOARCH" == "amd64" ]; then
@@ -69,7 +66,11 @@ else
 fi
 
 # This options make sense for cases where SUT (System Under Test) is compiled by test.
-COMMON_TEST_FLAGS=("-cpu=${CPU}" "${RACE}")
+COMMON_TEST_FLAGS=("${RACE}")
+if [[ -n "${CPU}" ]]; then
+  COMMON_TEST_FLAGS+=("--cpu=${CPU}")
+fi 
+
 log_callout "Running with ${COMMON_TEST_FLAGS[*]}"
 
 RUN_ARG=()
@@ -91,7 +92,7 @@ function run_unit_tests {
   local pkgs="${1:-./...}"
   shift 1
   # shellcheck disable=SC2086
-  go_test "${pkgs}" "parallel" : -short -timeout="${TIMEOUT:-3m}" "${COMMON_TEST_FLAGS[@]}" "${RUN_ARG[@]}" "$@"
+  GOLANG_TEST_SHORT=true go_test "${pkgs}" "parallel" : -short -timeout="${TIMEOUT:-3m}" "${COMMON_TEST_FLAGS[@]}" "${RUN_ARG[@]}" "$@"
 }
 
 function unit_pass {
@@ -109,7 +110,7 @@ function integration_extra {
 
 function integration_pass {
   local pkgs=${USERPKG:-"./integration/..."}
-  run_for_module "tests" go_test "${pkgs}" "keep_going" : -timeout="${TIMEOUT:-30m}" "${COMMON_TEST_FLAGS[@]}" "${RUN_ARG[@]}" "$@" || return $?
+  run_for_module "tests" go_test "${pkgs}" "parallel" : -timeout="${TIMEOUT:-15m}" "-v" "${COMMON_TEST_FLAGS[@]}" "${RUN_ARG[@]}" "$@" || return $?
   integration_extra "$@"
 }
 
@@ -173,13 +174,13 @@ function functional_pass {
   kill -s TERM "${agent_pids[@]}" || true
 
   if [[ "${etcd_tester_exit_code}" -ne "0" ]]; then
-    log_error -e "\nFAILED! 'tail -1000 /tmp/etcd-functional-1/etcd.log'"
+    log_error -e "\\nFAILED! 'tail -1000 /tmp/etcd-functional-1/etcd.log'"
     tail -1000 /tmp/etcd-functional-1/etcd.log
 
-    log_error -e "\nFAILED! 'tail -1000 /tmp/etcd-functional-2/etcd.log'"
+    log_error -e "\\nFAILED! 'tail -1000 /tmp/etcd-functional-2/etcd.log'"
     tail -1000 /tmp/etcd-functional-2/etcd.log
 
-    log_error -e "\nFAILED! 'tail -1000 /tmp/etcd-functional-3/etcd.log'"
+    log_error -e "\\nFAILED! 'tail -1000 /tmp/etcd-functional-3/etcd.log'"
     tail -1000 /tmp/etcd-functional-3/etcd.log
 
     log_error "--- FAIL: exit code" ${etcd_tester_exit_code}
@@ -207,12 +208,77 @@ function pkg_to_coverprofileflag {
   local prefix="${1}"
   local pkgs="${2}"
   local pkgs_normalized
-  pkgs_normalized=$(echo "${pkgs}" | tr "./ " "__+")
-  echo -n "-coverprofile=${coverdir}/${prefix}_${pkgs_normalized}.coverprofile"
+  prefix_normalized=$(echo "${prefix}" | tr "./ " "__+")
+  if [ "${pkgs}" == "./..." ]; then
+    pkgs_normalized="all"
+  else
+    pkgs_normalized=$(echo "${pkgs}" | tr "./ " "__+")
+  fi
+  mkdir -p "${coverdir}/${prefix_normalized}"
+  echo -n "-coverprofile=${coverdir}/${prefix_normalized}/${pkgs_normalized}.coverprofile"
 }
 
 function not_test_packages {
-  run_for_modules pkgs_in_module "./..." | grep -v /etcd/tests/v3/
+  for m in $(modules); do
+    if [[ $m =~ .*/etcd/tests/v3 ]]; then continue; fi
+    if [[ $m =~ .*/etcd/v3 ]]; then continue; fi
+    echo "${m}/..."
+  done
+}
+
+# split_dir [dir] [num]
+function split_dir {
+  local d="${1}"
+  local num="${2}"
+  local i=0
+  for f in "${d}/"*; do
+    local g=$(( "${i}" % "${num}" ))
+    mkdir -p "${d}_${g}"
+    mv "${f}" "${d}_${g}/"
+    (( i++ ))
+  done
+}
+
+function split_dir_pass {
+  split_dir ./covdir/integration 4
+}
+
+
+# merge_cov_files [coverdir] [outfile]
+# merges all coverprofile files into a single file in the given directory.
+function merge_cov_files {
+  local coverdir="${1}"
+  local cover_out_file="${2}"
+  log_callout "Merging coverage results in: ${coverdir}"
+  # gocovmerge requires not-empty test to start with:
+  echo "mode: set" > "${cover_out_file}"
+
+  local i=0
+  local count
+  count=$(find "${coverdir}"/*.coverprofile | wc -l)
+  for f in "${coverdir}"/*.coverprofile; do
+    # print once per 20 files
+    if ! (( "${i}" % 20 )); then
+      log_callout "${i} of ${count}: Merging file: ${f}"
+    fi
+    run_go_tool "github.com/gyuho/gocovmerge" "${f}" "${cover_out_file}"  > "${coverdir}/cover.tmp" 2>/dev/null
+    if [ -s "${coverdir}"/cover.tmp ]; then
+      mv "${coverdir}/cover.tmp" "${cover_out_file}"
+    fi
+    (( i++ ))
+  done
+}
+
+# merge_cov [coverdir]
+function merge_cov {
+  log_callout "[$(date)] Merging coverage files ..."
+  coverdir="${1}"
+  for d in "${coverdir}"/*/; do
+    d=${d%*/}  # remove the trailing "/"
+    merge_cov_files "${d}" "${d}.coverprofile" &
+  done
+  wait
+  merge_cov_files "${coverdir}" "${coverdir}/all.coverprofile"
 }
 
 function cov_pass {
@@ -230,7 +296,7 @@ function cov_pass {
   local coverdir
   coverdir=$(readlink -f "${COVERDIR}")
   mkdir -p "${coverdir}"
-  rm -f "${coverdir}/*.coverprofile" "${coverdir}/cover.*"
+  find "${coverdir}" -print0 -name '*.coverprofile' | xargs -0 rm
 
   local covpkgs
   covpkgs=$(not_test_packages)
@@ -240,45 +306,47 @@ function cov_pass {
 
   local failed=""
 
-  log_callout "Collecting coverage from unit tests ..."
+  log_callout "[$(date)] Collecting coverage from unit tests ..."
   for m in $(module_dirs); do
-    run_for_module "${m}" go_test "./..." "keep_going" "pkg_to_coverprofileflag unit" -short -timeout=30m \
+    GOLANG_TEST_SHORT=true run_for_module "${m}" go_test "./..." "parallel" "pkg_to_coverprofileflag unit_${m}" -short -timeout=30m \
        "${gocov_build_flags[@]}" "$@" || failed="$failed unit"
   done
 
-  log_callout "Collecting coverage from integration tests ..."
-  run_for_module "tests" go_test "./integration/..." "keep_going" "pkg_to_coverprofileflag integration" \
+  log_callout "[$(date)] Collecting coverage from integration tests ..."
+  run_for_module "tests" go_test "./integration/..." "parallel" "pkg_to_coverprofileflag integration" \
       -timeout=30m "${gocov_build_flags[@]}" "$@" || failed="$failed integration"
   # integration-store-v2
   run_for_module "tests" go_test "./integration/v2store/..." "keep_going" "pkg_to_coverprofileflag store_v2" \
       -tags v2v3 -timeout=5m "${gocov_build_flags[@]}" "$@" || failed="$failed integration_v2v3"
   # integration_cluster_proxy
-  run_for_module "tests" go_test "./integration/..." "keep_going" "pkg_to_coverprofileflag integration_cluster_proxy" \
+  run_for_module "tests" go_test "./integration/..." "parallel" "pkg_to_coverprofileflag integration_cluster_proxy" \
       -tags cluster_proxy -timeout=5m "${gocov_build_flags[@]}" || failed="$failed integration_cluster_proxy"
 
-  log_callout "Collecting coverage from e2e tests ..."
+  log_callout "[$(date)] Collecting coverage from e2e tests ..."
   # We don't pass 'gocov_build_flags' nor 'pkg_to_coverprofileflag' here,
-  # as the coverage is colleced from the ./bin/etcd_test & ./bin/etcdctl_test internally spawned.
-  run_for_module "tests" go_test "./e2e/..." "keep_going" : -tags=cov -timeout 30m "$@" || failed="$failed tests_e2e"
+  # as the coverage is collected from the ./bin/etcd_test & ./bin/etcdctl_test internally spawned.
+  mkdir -p "${COVERDIR}/e2e"
+  COVERDIR="${COVERDIR}/e2e" run_for_module "tests" go_test "./e2e/..." "keep_going" : -tags=cov -timeout 30m "$@" || failed="$failed tests_e2e"
+  split_dir "${COVERDIR}/e2e" 10
 
-  log_callout "Collecting coverage from e2e tests with proxy ..."
-  run_for_module "tests" go_test "./e2e/..." "keep_going" : -tags="cov cluster_proxy" -timeout 30m "$@" || failed="$failed tests_e2e_proxy"
+  log_callout "[$(date)] Collecting coverage from e2e tests with proxy ..."
+  mkdir -p "${COVERDIR}/e2e_proxy"
+  COVERDIR="${COVERDIR}/e2e_proxy" run_for_module "tests" go_test "./e2e/..." "keep_going" : -tags="cov cluster_proxy" -timeout 30m "$@" || failed="$failed tests_e2e_proxy"
+  split_dir "${COVERDIR}/e2e_proxy" 10
 
-  log_callout "Merging coverage results ..."
-  local cover_out_file="${coverdir}/cover.out"
-  # gocovmerge requires not-empty test to start with:
-  echo "mode: set" > "${cover_out_file}"
+  local cover_out_file="${coverdir}/all.coverprofile"
+  merge_cov "${coverdir}"
 
-  # incrementally merge to get coverage data even if some coverage files are corrupted
-  for f in "${coverdir}"/*.coverprofile; do
-    echo "merging test coverage file ${f}"
-    run_go_tool "github.com/gyuho/gocovmerge" "${f}" "${cover_out_file}"  > "${coverdir}/cover.tmp" || failed="$failed gocovmerge:$f"
-    if [ -s "${coverdir}"/cover.tmp ]; then
-      mv "${coverdir}/cover.tmp" "${cover_out_file}"
-    fi
-  done
   # strip out generated files (using GNU-style sed)
-  sed --in-place '/generated.go/d' "${cover_out_file}" || true
+  sed --in-place -E "/[.]pb[.](gw[.])?go/d" "${cover_out_file}" || true
+
+  sed --in-place -E "s|go.etcd.io/etcd/api/v3/|api/|g" "${cover_out_file}" || true
+  sed --in-place -E "s|go.etcd.io/etcd/client/v3/|client/v3/|g" "${cover_out_file}" || true
+  sed --in-place -E "s|go.etcd.io/etcd/client/v2/|client/v2/|g" "${cover_out_file}" || true
+  sed --in-place -E "s|go.etcd.io/etcd/etcdctl/v3/|etcdctl/|g" "${cover_out_file}" || true
+  sed --in-place -E "s|go.etcd.io/etcd/pkg/v3/|pkg/|g" "${cover_out_file}" || true
+  sed --in-place -E "s|go.etcd.io/etcd/raft/v3/|raft/|g" "${cover_out_file}" || true
+  sed --in-place -E "s|go.etcd.io/etcd/server/v3/|server/|g" "${cover_out_file}" || true
 
   # held failures to generate the full coverage file, now fail
   if [ -n "$failed" ]; then
@@ -324,18 +392,19 @@ function shellcheck_pass {
 }
 
 function shellws_pass {
+  TAB=$'\t'
   log_callout "Ensuring no tab-based indention in shell scripts"
   local files
   files=$(find ./ -name '*.sh' -print0 | xargs -0 )
   # shellcheck disable=SC2206
   files=( ${files[@]} "./scripts/build-binary" "./scripts/build-docker" "./scripts/release" )
-  log_cmd "grep -E -n $'^ *\t' ${files[*]}"
+  log_cmd "grep -E -n $'^ *${TAB}' ${files[*]}"
   # shellcheck disable=SC2086
-  if grep -E -n $'^ *\t' "${files[@]}" | sed $'s|\t|[\\\\tab]|g'; then
+  if grep -E -n $'^ *${TAB}' "${files[@]}" | sed $'s|${TAB}|[\\\\tab]|g'; then
     log_error "FAIL: found tab-based indention in bash scripts. Use '  ' (double space)."
     local files_with_tabs
-    files_with_tabs=$(grep -E -l $'^ *\t' "${files[@]}")
-    log_warning "Try: sed -i 's|\t|  |g' $files_with_tabs"
+    files_with_tabs=$(grep -E -l $'^ *\\t' "${files[@]}")
+    log_warning "Try: sed -i 's|\\t|  |g' $files_with_tabs"
     return 1
   else
     log_success "SUCCESS: no tabulators found."
@@ -344,7 +413,7 @@ function shellws_pass {
 }
 
 function markdown_you_find_eschew_you {
-  local find_you_cmd="find . -name \*.md ! -path '*/vendor/*' ! -path './Documentation/*' ! -path './gopath.proto/*' ! -path './release/*' -exec grep -E --color '[Yy]ou[r]?[ '\''.,;]' {} + || true"
+  local find_you_cmd="find . -name \\*.md ! -path '*/vendor/*' ! -path './Documentation/*' ! -path './gopath.proto/*' ! -path './release/*' -exec grep -E --color '[Yy]ou[r]?[ '\\''.,;]' {} + || true"
   run eval "${find_you_cmd}"
 }
 
@@ -422,7 +491,7 @@ function receiver_name_for_package {
   while IFS= read -r line; do gofiles+=("$line"); done < <(go_srcs_in_module "$1")
 
   recvs=$(grep 'func ([^*]' "${gofiles[@]}"  | tr  ':' ' ' |  \
-    awk ' { print $2" "$3" "$4" "$1 }' | sed "s/[a-zA-Z\.]*go//g" |  sort  | uniq  | \
+    awk ' { print $2" "$3" "$4" "$1 }' | sed "s/[a-zA-Z\\.]*go//g" |  sort  | uniq  | \
     grep -Ev  "(Descriptor|Proto|_)"  | awk ' { print $3" "$4 } ' | sort | uniq -c | grep -v ' 1 ' | awk ' { print $2 } ')
   if [ -n "${recvs}" ]; then
     # shellcheck disable=SC2206
@@ -498,7 +567,7 @@ function bom_pass {
   run cp go.mod.tmp go.mod || return 2
 
   if [ "${code}" -ne 0 ] ; then
-    log_error -e "license-bill-of-materials (code: ${code}) failed with:\n${output}"
+    log_error -e "license-bill-of-materials (code: ${code}) failed with:\\n${output}"
     return 255
   else
     echo "${output}" > "bom-now.json.tmp"
@@ -530,7 +599,7 @@ function dep_pass {
 
   for dup in ${duplicates}; do
     log_error "FAIL: inconsistent versions for depencency: ${dup}"
-    echo "${all_dependencies}" | grep "${dup}" | sed "s|\([^,]*\),\([^,]*\),\([^,]*\)|  - \1@\2 from: \3|g"
+    echo "${all_dependencies}" | grep "${dup}" | sed "s|\\([^,]*\\),\\([^,]*\\),\\([^,]*\\)|  - \\1@\\2 from: \\3|g"
   done
   if [[ -n "${duplicates}" ]]; then
     log_error "FAIL: inconsistent dependencies"
@@ -617,7 +686,7 @@ function mod_tidy_pass {
 function run_pass {
   local pass="${1}"
   shift 1
-  log_callout -e "\n'${pass}' started at $(date)"
+  log_callout -e "\\n'${pass}' started at $(date)"
   if "${pass}_pass" "$@" ; then
     log_success "'${pass}' completed at $(date)"
   else
@@ -626,6 +695,7 @@ function run_pass {
   fi
 }
 
+log_callout "Starting at: $(date)"
 for pass in $PASSES; do
   run_pass "${pass}" "${@}"
 done
