@@ -21,11 +21,24 @@ import (
 	"go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/v2store"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/v2v3"
+	"go.etcd.io/etcd/tests/v3/integration"
 )
 
 // TODO: fix tests
 
-func TestCreateKV(t *testing.T) {
+func runWithCluster(t testing.TB, runner func(testing.TB, []string)) {
+	integration.BeforeTest(t)
+	cfg := integration.ClusterConfig{Size: 1}
+	clus := integration.NewClusterV3(t, &cfg)
+	defer clus.Terminate(t)
+	endpoints := []string{clus.Client(0).Endpoints()[0]}
+	runner(t, endpoints)
+}
+
+func TestCreateKV(t *testing.T) { runWithCluster(t, testCreateKV) }
+
+func testCreateKV(t testing.TB, endpoints []string) {
+	integration.BeforeTest(t)
 	testCases := []struct {
 		key          string
 		value        string
@@ -77,11 +90,12 @@ func TestCreateKV(t *testing.T) {
 	}
 }
 
-func TestSetKV(t *testing.T) {
+func TestSetKV(t *testing.T) { runWithCluster(t, testSetKV) }
+
+func testSetKV(t testing.TB, endpoints []string) {
 	testCases := []struct {
 		key            string
 		value          string
-		dir            bool
 		wantIndexMatch bool
 	}{
 		{key: "/sdir/set", value: "1", wantIndexMatch: true},
@@ -113,7 +127,10 @@ func TestSetKV(t *testing.T) {
 	}
 }
 
-func TestCreateSetDir(t *testing.T) {
+func TestCreateSetDir(t *testing.T) { runWithCluster(t, testCreateSetDir) }
+
+func testCreateSetDir(t testing.TB, endpoints []string) {
+	integration.BeforeTest(t)
 	testCases := []struct {
 		dir string
 	}{
@@ -129,7 +146,7 @@ func TestCreateSetDir(t *testing.T) {
 	v2 := v2v3.NewStore(cli, "")
 
 	for ti, tc := range testCases {
-		ev, err := v2.Create(tc.dir, true, "", false, v2store.TTLOptionSet{})
+		_, err := v2.Create(tc.dir, true, "", false, v2store.TTLOptionSet{})
 		if err != nil {
 			t.Skipf("%d: got err %v", ti, err)
 		}
@@ -138,7 +155,7 @@ func TestCreateSetDir(t *testing.T) {
 			t.Skipf("%d: expected err got nil", ti)
 		}
 
-		ev, err = v2.Delete("ddir", true, true)
+		ev, err := v2.Delete("ddir", true, true)
 		if err != nil {
 			t.Skipf("%d: got err %v", ti, err)
 		}

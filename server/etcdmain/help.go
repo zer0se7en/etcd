@@ -85,6 +85,10 @@ Member:
     Frequency duration of server-to-client ping to check if a connection is alive (0 to disable).
   --grpc-keepalive-timeout '20s'
     Additional duration of wait before closing a non-responsive connection (0 to disable).
+  --socket-reuse-port 'false'
+    Enable to set socket option SO_REUSEPORT on listeners allowing rebinding of a port already in use.
+  --socket-reuse-address 'false'
+	Enable to set socket option SO_REUSEADDR on listeners allowing binding to an address in TIME_WAIT state.
 
 Clustering:
   --initial-advertise-peer-urls 'http://localhost:2380'
@@ -112,7 +116,7 @@ Clustering:
     Suffix to the dns srv name queried when bootstrapping.
   --strict-reconfig-check '` + strconv.FormatBool(embed.DefaultStrictReconfigCheck) + `'
     Reject reconfiguration requests that would cause quorum loss.
-  --pre-vote 'false'
+  --pre-vote 'true'
     Enable to run an additional Raft election phase.
   --auto-compaction-retention '0'
     Auto compaction retention length. 0 means disable auto compaction.

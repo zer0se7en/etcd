@@ -22,14 +22,13 @@ import (
 
 	"go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/ordering"
-	"go.etcd.io/etcd/pkg/v3/testutil"
 	"go.etcd.io/etcd/tests/v3/integration"
 )
 
 func TestDetectKvOrderViolation(t *testing.T) {
 	var errOrderViolation = errors.New("Detected Order Violation")
 
-	defer testutil.AfterTest(t)
+	integration.BeforeTest(t)
 	clus := integration.NewClusterV3(t, &integration.ClusterConfig{Size: 3})
 	defer clus.Terminate(t)
 
@@ -92,7 +91,7 @@ func TestDetectKvOrderViolation(t *testing.T) {
 func TestDetectTxnOrderViolation(t *testing.T) {
 	var errOrderViolation = errors.New("Detected Order Violation")
 
-	defer testutil.AfterTest(t)
+	integration.BeforeTest(t)
 	clus := integration.NewClusterV3(t, &integration.ClusterConfig{Size: 3})
 	defer clus.Terminate(t)
 
@@ -104,7 +103,6 @@ func TestDetectTxnOrderViolation(t *testing.T) {
 		},
 	}
 	cli, err := clientv3.New(cfg)
-	defer cli.Close()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-// Copyright 2016 The etcd Authors
+// Copyright 2021 The etcd Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package integration
+//go:build windows
+// +build windows
+
+package etcdserver
 
 import (
-	"io/ioutil"
-
-	"go.etcd.io/etcd/client/v3"
-
-	"google.golang.org/grpc/grpclog"
+	"errors"
 )
 
-func init() {
-	clientv3.SetLogger(grpclog.NewLoggerV2(ioutil.Discard, ioutil.Discard, ioutil.Discard))
+// MlockAll prevents current and future mmaped memory areas from being swapped out.
+func MlockAll() error {
+	return errors.New("Mlockall is supported only on UNIX systems.")
 }

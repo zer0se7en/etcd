@@ -232,11 +232,13 @@ type Config struct {
 	// before closing a non-responsive connection. 0 to disable.
 	GRPCKeepAliveTimeout time.Duration `json:"grpc-keepalive-timeout"`
 
+	// SocketOpts are socket options passed to listener config.
+	SocketOpts transport.SocketOpts
+
 	// PreVote is true to enable Raft Pre-Vote.
 	// If enabled, Raft runs an additional election phase
 	// to check whether it would get enough votes to win
 	// an election, thus minimizing disruptions.
-	// TODO: enable by default in 3.5.
 	PreVote bool `json:"pre-vote"`
 
 	CORS map[string]struct{}
@@ -345,6 +347,14 @@ type Config struct {
 	UnsafeNoFsync bool `json:"unsafe-no-fsync"`
 
 	ExperimentalDowngradeCheckTime time.Duration `json:"experimental-downgrade-check-time"`
+
+	// ExperimentalMemoryMlock enables mlocking of etcd owned memory pages.
+	// The setting improves etcd tail latency in environments were:
+	//   - memory pressure might lead to swapping pages to disk
+	//   - disk latency might be unstable
+	// Currently all etcd memory gets mlocked, but in future the flag can
+	// be refined to mlock in-use area of bbolt only.
+	ExperimentalMemoryMlock bool `json:"experimental-memory-mlock"`
 }
 
 // configYAML holds the config suitable for yaml parsing
@@ -400,6 +410,8 @@ func NewConfig() *Config {
 		GRPCKeepAliveInterval: DefaultGRPCKeepAliveInterval,
 		GRPCKeepAliveTimeout:  DefaultGRPCKeepAliveTimeout,
 
+		SocketOpts: transport.SocketOpts{},
+
 		TickMs:                     100,
 		ElectionMs:                 1000,
 		InitialElectionTickAdvance: true,
@@ -423,7 +435,7 @@ func NewConfig() *Config {
 		BcryptCost:   uint(bcrypt.DefaultCost),
 		AuthTokenTTL: 300,
 
-		PreVote: false, // TODO: enable by default in v3.5
+		PreVote: true,
 
 		loggerMu:          new(sync.RWMutex),
 		logger:            nil,
@@ -433,6 +445,7 @@ func NewConfig() *Config {
 		EnableGRPCGateway: true,
 
 		ExperimentalDowngradeCheckTime: DefaultDowngradeCheckTime,
+		ExperimentalMemoryMlock:        false,
 	}
 	cfg.InitialCluster = cfg.InitialClusterFromName(cfg.Name)
 	return cfg

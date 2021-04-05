@@ -27,7 +27,6 @@ import (
 	"go.etcd.io/etcd/client/v3/credentials"
 	"go.etcd.io/etcd/client/v3/internal/endpoint"
 	"go.etcd.io/etcd/client/v3/internal/resolver"
-	"go.etcd.io/etcd/pkg/v3/logutil"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -99,7 +98,9 @@ func NewFromURLs(urls []string) (*Client, error) {
 	return New(Config{Endpoints: urls})
 }
 
-// WithLogger sets a logger
+// WithLogger overrides the logger.
+// Does not changes grpcLogger, that can be explicitly configured
+// using grpc_zap.ReplaceGrpcLoggerV2(..) method.
 func (c *Client) WithLogger(lg *zap.Logger) *Client {
 	c.lgMu.Lock()
 	c.lg = lg
@@ -298,7 +299,7 @@ func (c *Client) credentialsForEndpoint(ep string) grpccredentials.TransportCred
 		}
 		return credentials.NewBundle(credentials.Config{}).TransportCredentials()
 	default:
-		panic(fmt.Errorf("Unsupported CredsRequirement: %v", r))
+		panic(fmt.Errorf("unsupported CredsRequirement: %v", r))
 	}
 }
 
@@ -329,12 +330,12 @@ func newClient(cfg *Config) (*Client, error) {
 		lgMu:     new(sync.RWMutex),
 	}
 
-	lcfg := logutil.DefaultZapLoggerConfig
-	if cfg.LogConfig != nil {
-		lcfg = *cfg.LogConfig
-	}
 	var err error
-	client.lg, err = lcfg.Build()
+	if cfg.LogConfig != nil {
+		client.lg, err = cfg.LogConfig.Build()
+	} else {
+		client.lg, err = createDefaultZapLogger()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -348,7 +349,7 @@ func newClient(cfg *Config) (*Client, error) {
 			return nil, fmt.Errorf("gRPC message recv limit (%d bytes) must be greater than send limit (%d bytes)", cfg.MaxCallRecvMsgSize, cfg.MaxCallSendMsgSize)
 		}
 		callOpts := []grpc.CallOption{
-			defaultFailFast,
+			defaultWaitForReady,
 			defaultMaxCallSendMsgSize,
 			defaultMaxCallRecvMsgSize,
 		}

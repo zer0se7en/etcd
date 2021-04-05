@@ -26,9 +26,9 @@ import (
 	pb "go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	"go.etcd.io/etcd/client/v3"
-	"go.etcd.io/etcd/pkg/v3/testutil"
 	"go.etcd.io/etcd/tests/v3/integration"
 	"go.etcd.io/etcd/tests/v3/integration/clientv3"
+	"go.uber.org/zap/zaptest"
 	"google.golang.org/grpc"
 )
 
@@ -104,7 +104,7 @@ func TestBalancerUnderNetworkPartitionSerializableGet(t *testing.T) {
 }
 
 func testBalancerUnderNetworkPartition(t *testing.T, op func(*clientv3.Client, context.Context) error, timeout time.Duration) {
-	defer testutil.AfterTest(t)
+	integration.BeforeTest(t)
 
 	clus := integration.NewClusterV3(t, &integration.ClusterConfig{
 		Size:               3,
@@ -125,7 +125,7 @@ func testBalancerUnderNetworkPartition(t *testing.T, op func(*clientv3.Client, c
 		t.Fatal(err)
 	}
 	defer cli.Close()
-
+	cli = cli.WithLogger(zaptest.NewLogger(t).Named("client"))
 	// wait for eps[0] to be pinned
 	clientv3test.MustWaitPinReady(t, cli)
 
@@ -137,6 +137,8 @@ func testBalancerUnderNetworkPartition(t *testing.T, op func(*clientv3.Client, c
 	for i := 0; i < 5; i++ {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		err = op(cli, ctx)
+		t.Logf("Op returned error: %v", err)
+		t.Log("Cancelling...")
 		cancel()
 		if err == nil {
 			break
@@ -159,7 +161,7 @@ func testBalancerUnderNetworkPartition(t *testing.T, op func(*clientv3.Client, c
 // switches endpoint when leader fails and linearizable get requests returns
 // "etcdserver: request timed out".
 func TestBalancerUnderNetworkPartitionLinearizableGetLeaderElection(t *testing.T) {
-	defer testutil.AfterTest(t)
+	integration.BeforeTest(t)
 
 	clus := integration.NewClusterV3(t, &integration.ClusterConfig{
 		Size:               3,
@@ -214,7 +216,7 @@ func TestBalancerUnderNetworkPartitionWatchFollower(t *testing.T) {
 // testBalancerUnderNetworkPartitionWatch ensures watch stream
 // to a partitioned node be closed when context requires leader.
 func testBalancerUnderNetworkPartitionWatch(t *testing.T, isolateLeader bool) {
-	defer testutil.AfterTest(t)
+	integration.BeforeTest(t)
 
 	clus := integration.NewClusterV3(t, &integration.ClusterConfig{
 		Size:               3,
@@ -241,9 +243,9 @@ func testBalancerUnderNetworkPartitionWatch(t *testing.T, isolateLeader bool) {
 	clientv3test.MustWaitPinReady(t, watchCli)
 	t.Logf("successful connection with server: %v", target)
 
-	// add all eps to list, so that when the original pined one fails
-	// the client can switch to other available eps
-	watchCli.SetEndpoints(eps...)
+	// We stick to the original endpoint, so when the one fails we don't switch
+	// under the cover to other available eps, but expose the failure to the
+	// caller (test assertion).
 
 	wch := watchCli.Watch(clientv3.WithRequireLeader(context.Background()), "foo", clientv3.WithCreatedNotify())
 	select {
@@ -274,7 +276,7 @@ func testBalancerUnderNetworkPartitionWatch(t *testing.T, isolateLeader bool) {
 }
 
 func TestDropReadUnderNetworkPartition(t *testing.T) {
-	defer testutil.AfterTest(t)
+	integration.BeforeTest(t)
 
 	clus := integration.NewClusterV3(t, &integration.ClusterConfig{
 		Size:               3,

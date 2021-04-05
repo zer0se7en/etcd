@@ -28,7 +28,7 @@ import (
 )
 
 func TestDialCancel(t *testing.T) {
-	defer testutil.AfterTest(t)
+	testutil.BeforeTest(t)
 
 	// accept first connection so client is created with dial timeout
 	ln, err := net.Listen("unix", "dialcancel:12345")
@@ -80,7 +80,7 @@ func TestDialCancel(t *testing.T) {
 }
 
 func TestDialTimeout(t *testing.T) {
-	defer testutil.AfterTest(t)
+	testutil.BeforeTest(t)
 
 	wantError := context.DeadlineExceeded
 
@@ -140,13 +140,13 @@ func TestDialNoTimeout(t *testing.T) {
 }
 
 func TestIsHaltErr(t *testing.T) {
-	if !isHaltErr(nil, fmt.Errorf("etcdserver: some etcdserver error")) {
+	if !isHaltErr(context.TODO(), fmt.Errorf("etcdserver: some etcdserver error")) {
 		t.Errorf(`error prefixed with "etcdserver: " should be Halted by default`)
 	}
-	if isHaltErr(nil, rpctypes.ErrGRPCStopped) {
+	if isHaltErr(context.TODO(), rpctypes.ErrGRPCStopped) {
 		t.Errorf("error %v should not halt", rpctypes.ErrGRPCStopped)
 	}
-	if isHaltErr(nil, rpctypes.ErrGRPCNoLeader) {
+	if isHaltErr(context.TODO(), rpctypes.ErrGRPCNoLeader) {
 		t.Errorf("error %v should not halt", rpctypes.ErrGRPCNoLeader)
 	}
 	ctx, cancel := context.WithCancel(context.TODO())

@@ -36,6 +36,7 @@ import (
 	"go.etcd.io/etcd/pkg/v3/types"
 	"go.etcd.io/etcd/raft/v3"
 	"go.etcd.io/etcd/raft/v3/raftpb"
+	"go.etcd.io/etcd/server/v3/config"
 	"go.etcd.io/etcd/server/v3/etcdserver"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/membership"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/snap"
@@ -213,7 +214,7 @@ func (s *v3Manager) Restore(cfg RestoreConfig) error {
 		return err
 	}
 
-	srv := etcdserver.ServerConfig{
+	srv := config.ServerConfig{
 		Logger:              s.lg,
 		Name:                cfg.Name,
 		PeerURLs:            pURLs,
@@ -354,14 +355,17 @@ func (s *v3Manager) saveDB() error {
 	// update consistentIndex so applies go through on etcdserver despite
 	// having a new raft instance
 	be := backend.NewDefaultBackend(dbpath)
+	defer be.Close()
 
 	ci := cindex.NewConsistentIndex(be.BatchTx())
 	ci.SetConsistentIndex(uint64(commit))
 
 	// a lessor never timeouts leases
 	lessor := lease.NewLessor(s.lg, be, lease.LessorConfig{MinLeaseTTL: math.MaxInt64}, ci)
+	defer lessor.Stop()
 
 	mvs := mvcc.NewStore(s.lg, be, lessor, ci, mvcc.StoreConfig{CompactionBatchLimit: math.MaxInt32})
+	defer mvs.Close()
 	txn := mvs.Write(traceutil.TODO())
 	btx := be.BatchTx()
 	del := func(k, v []byte) error {
@@ -379,13 +383,12 @@ func (s *v3Manager) saveDB() error {
 	txn.End()
 
 	mvs.Commit()
-	mvs.Close()
-	be.Close()
-
 	return nil
 }
 
 // saveWALAndSnap creates a WAL for the initial cluster
+//
+// TODO: This code ignores learners !!!
 func (s *v3Manager) saveWALAndSnap() error {
 	if err := fileutil.CreateDirAll(s.walDir); err != nil {
 		return err
@@ -453,19 +456,20 @@ func (s *v3Manager) saveWALAndSnap() error {
 	if berr != nil {
 		return berr
 	}
+	confState := raftpb.ConfState{
+		Voters: nodeIDs,
+	}
 	raftSnap := raftpb.Snapshot{
 		Data: b,
 		Metadata: raftpb.SnapshotMetadata{
-			Index: commit,
-			Term:  term,
-			ConfState: raftpb.ConfState{
-				Voters: nodeIDs,
-			},
+			Index:     commit,
+			Term:      term,
+			ConfState: confState,
 		},
 	}
 	sn := snap.New(s.lg, s.snapDir)
 	if err := sn.SaveSnap(raftSnap); err != nil {
 		return err
 	}
-	return w.SaveSnapshot(walpb.Snapshot{Index: commit, Term: term})
+	return w.SaveSnapshot(walpb.Snapshot{Index: commit, Term: term, ConfState: &confState})
 }

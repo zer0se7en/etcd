@@ -1,4 +1,4 @@
-// Copyright 2017 The etcd Authors
+// Copyright 2021 The etcd Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,16 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ordering
+//go:build aix || darwin || dragonfly || freebsd || linux || netbsd || openbsd || solaris || zos
+// +build aix darwin dragonfly freebsd linux netbsd openbsd solaris zos
+
+package etcdserver
 
 import (
-	"io/ioutil"
+	"fmt"
 
-	"go.etcd.io/etcd/client/v3"
-
-	"google.golang.org/grpc/grpclog"
+	"golang.org/x/sys/unix"
 )
 
-func init() {
-	clientv3.SetLogger(grpclog.NewLoggerV2(ioutil.Discard, ioutil.Discard, ioutil.Discard))
+// MlockAll prevents current and future mmaped memory areas from being swapped out.
+func MlockAll() error {
+	err := unix.Mlockall(unix.MCL_FUTURE | unix.MCL_CURRENT)
+	if err != nil {
+		return fmt.Errorf("cannot mlockAll: %v", err)
+	}
+	return nil
 }

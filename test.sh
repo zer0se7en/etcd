@@ -110,7 +110,7 @@ function integration_extra {
 
 function integration_pass {
   local pkgs=${USERPKG:-"./integration/..."}
-  run_for_module "tests" go_test "${pkgs}" "parallel" : -timeout="${TIMEOUT:-15m}" "-v" "${COMMON_TEST_FLAGS[@]}" "${RUN_ARG[@]}" "$@" || return $?
+  run_for_module "tests" go_test "${pkgs}" "parallel" : -timeout="${TIMEOUT:-15m}" "${COMMON_TEST_FLAGS[@]}" "${RUN_ARG[@]}" "$@" || return $?
   integration_extra "$@"
 }
 
@@ -368,8 +368,8 @@ function fmt_pass {
 
   # TODO: add "unparam","staticcheck", "unconvert", "ineffasign","nakedret"
   # after resolving ore-existing errors.
+  # markdown_you  -  too sensitive check was temporarilly disbled. 
   for p in shellcheck \
-      markdown_you \
       goword \
       gofmt \
       govet \
