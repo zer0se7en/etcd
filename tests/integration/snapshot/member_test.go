@@ -17,12 +17,11 @@ package snapshot_test
 import (
 	"context"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
+	"go.etcd.io/etcd/client/pkg/v3/testutil"
 	"go.etcd.io/etcd/client/v3"
-	"go.etcd.io/etcd/pkg/v3/testutil"
 	"go.etcd.io/etcd/server/v3/embed"
 	"go.etcd.io/etcd/server/v3/etcdserver"
 	"go.etcd.io/etcd/tests/v3/integration"
@@ -42,7 +41,6 @@ func TestSnapshotV3RestoreMultiMemberAdd(t *testing.T) {
 
 	defer func() {
 		for i := 0; i < clusterN; i++ {
-			os.RemoveAll(srvs[i].Config().Dir)
 			srvs[i].Close()
 		}
 	}()
@@ -50,7 +48,7 @@ func TestSnapshotV3RestoreMultiMemberAdd(t *testing.T) {
 	// wait for health interval + leader election
 	time.Sleep(etcdserver.HealthInterval + 2*time.Second)
 
-	cli, err := clientv3.New(clientv3.Config{Endpoints: []string{cURLs[0].String()}})
+	cli, err := integration.NewClient(t, clientv3.Config{Endpoints: []string{cURLs[0].String()}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +80,6 @@ func TestSnapshotV3RestoreMultiMemberAdd(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		os.RemoveAll(cfg.Dir)
 		srv.Close()
 	}()
 	select {
@@ -91,7 +88,7 @@ func TestSnapshotV3RestoreMultiMemberAdd(t *testing.T) {
 		t.Fatalf("failed to start the newly added etcd member")
 	}
 
-	cli2, err := clientv3.New(clientv3.Config{Endpoints: []string{newCURLs[0].String()}})
+	cli2, err := integration.NewClient(t, clientv3.Config{Endpoints: []string{newCURLs[0].String()}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1034,7 +1034,7 @@ func TestKVForLearner(t *testing.T) {
 		DialOptions: []grpc.DialOption{grpc.WithBlock()},
 	}
 	// this client only has endpoint of the learner member
-	cli, err := clientv3.New(cfg)
+	cli, err := integration.NewClient(t, cfg)
 	if err != nil {
 		t.Fatalf("failed to create clientv3: %v", err)
 	}
@@ -1106,7 +1106,7 @@ func TestBalancerSupportLearner(t *testing.T) {
 		DialTimeout: 5 * time.Second,
 		DialOptions: []grpc.DialOption{grpc.WithBlock()},
 	}
-	cli, err := clientv3.New(cfg)
+	cli, err := integration.NewClient(t, cfg)
 	if err != nil {
 		t.Fatalf("failed to create clientv3: %v", err)
 	}
@@ -1118,6 +1118,7 @@ func TestBalancerSupportLearner(t *testing.T) {
 	if _, err := cli.Get(context.Background(), "foo"); err == nil {
 		t.Fatalf("expect Get request to learner to fail, got no error")
 	}
+	t.Logf("Expected: Read from learner error: %v", err)
 
 	eps := []string{learnerEp, clus.Members[0].GRPCAddr()}
 	cli.SetEndpoints(eps...)

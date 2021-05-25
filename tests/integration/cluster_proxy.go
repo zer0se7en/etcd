@@ -25,8 +25,6 @@ import (
 	"go.etcd.io/etcd/client/v3/namespace"
 	"go.etcd.io/etcd/server/v3/proxy/grpcproxy"
 	"go.etcd.io/etcd/server/v3/proxy/grpcproxy/adapter"
-
-	"go.uber.org/zap"
 )
 
 const ThroughProxy = true
@@ -56,7 +54,7 @@ func toGRPC(c *clientv3.Client) grpcAPI {
 	// TODO: Refactor to a separate clientv3.Client instance instead of the context alone.
 	ctx, ctxCancel := context.WithCancel(context.WithValue(context.TODO(), "_name", "grpcProxyContext"))
 
-	lg := zap.NewExample()
+	lg := c.GetLogger()
 
 	if v, ok := proxies[c]; ok {
 		return v.grpc

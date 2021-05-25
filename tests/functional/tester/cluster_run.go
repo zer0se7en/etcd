@@ -19,7 +19,7 @@ import (
 	"os"
 	"time"
 
-	"go.etcd.io/etcd/pkg/v3/fileutil"
+	"go.etcd.io/etcd/client/pkg/v3/fileutil"
 	"go.etcd.io/etcd/tests/v3/functional/rpcpb"
 
 	"go.uber.org/zap"
@@ -32,6 +32,10 @@ const compactQPS = 50000
 // Run starts tester.
 func (clus *Cluster) Run() {
 	defer printReport()
+
+	// updateCases must be executed after etcd is started, because the FAILPOINTS case
+	// needs to obtain all the failpoints from the etcd member.
+	clus.updateCases()
 
 	if err := fileutil.TouchDirAll(clus.Tester.DataDir); err != nil {
 		clus.lg.Panic(

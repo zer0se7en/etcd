@@ -20,9 +20,12 @@ import (
 	"testing"
 
 	grpc_logsettable "github.com/grpc-ecosystem/go-grpc-middleware/logging/settable"
-	grpc_zap "github.com/grpc-ecosystem/go-grpc-middleware/logging/zap"
-	"go.etcd.io/etcd/pkg/v3/testutil"
+	"go.etcd.io/etcd/client/pkg/v3/testutil"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/server/v3/embed"
+	"go.etcd.io/etcd/server/v3/verify"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zapgrpc"
 	"go.uber.org/zap/zaptest"
 )
 
@@ -35,7 +38,10 @@ func init() {
 func BeforeTest(t testutil.TB) {
 	testutil.BeforeTest(t)
 
-	grpc_zap.SetGrpcLoggerV2(grpc_logger, zaptest.NewLogger(t).Named("grpc"))
+	grpc_logger.Set(zapgrpc.NewLogger(zaptest.NewLogger(t).Named("grpc")))
+
+	// Integration tests should verify written state as much as possible.
+	os.Setenv(verify.ENV_VERIFY, verify.ENV_VERIFY_ALL_VALUE)
 
 	previousWD, err := os.Getwd()
 	if err != nil {
@@ -60,7 +66,15 @@ func MustAbsPath(path string) string {
 func NewEmbedConfig(t testing.TB, name string) *embed.Config {
 	cfg := embed.NewConfig()
 	cfg.Name = name
-	cfg.ZapLoggerBuilder = embed.NewZapCoreLoggerBuilder(zaptest.NewLogger(t).Named(cfg.Name), nil, nil)
+	lg := zaptest.NewLogger(t, zaptest.Level(zapcore.InfoLevel)).Named(cfg.Name)
+	cfg.ZapLoggerBuilder = embed.NewZapLoggerBuilder(lg)
 	cfg.Dir = t.TempDir()
 	return cfg
+}
+
+func NewClient(t testing.TB, cfg clientv3.Config) (*clientv3.Client, error) {
+	if cfg.Logger == nil {
+		cfg.Logger = zaptest.NewLogger(t).Named("client")
+	}
+	return clientv3.New(cfg)
 }

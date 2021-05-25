@@ -194,6 +194,7 @@ enum Checker {
   LEASE_EXPIRE = 1;
   RUNNER = 2;
   NO_CHECK = 3;
+  SHORT_TTL_LEASE_EXPIRE = 4;
 }
 
 message Etcd {
@@ -238,6 +239,9 @@ message Etcd {
   // LogOutputs is the log file to store current etcd server logs.
   repeated string LogOutputs = 72 [(gogoproto.moretags) = "yaml:\"log-outputs\""];
   string LogLevel = 73 [(gogoproto.moretags) = "yaml:\"log-level\""];
+
+  bool SocketReuseAddress = 81 [(gogoproto.moretags) = "yaml:\"socket-reuse-address\""];
+  bool SocketReusePort = 82 [(gogoproto.moretags) = "yaml:\"socket-reuse-port\""];
 }
 
 enum Operation {
@@ -624,6 +628,9 @@ enum Case {
   // FAILPOINTS injects failpoints to etcd server runtime, triggering panics
   // in critical code paths.
   FAILPOINTS = 400;
+
+  // FAILPOINTS_WITH_DISK_IO_LATENCY injects high disk I/O latency failure in raftAfterSave code paths.
+  FAILPOINTS_WITH_DISK_IO_LATENCY = 401;
 
   // EXTERNAL runs external failure injection scripts.
   EXTERNAL = 500;
