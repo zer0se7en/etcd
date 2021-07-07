@@ -34,9 +34,6 @@ import (
 )
 
 var (
-	scheduledCompactKeyName = []byte("scheduledCompactRev")
-	finishedCompactKeyName  = []byte("finishedCompactRev")
-
 	ErrCompacted = errors.New("mvcc: required revision has been compacted")
 	ErrFutureRev = errors.New("mvcc: required revision is a future revision")
 )
@@ -52,9 +49,11 @@ const (
 
 var restoreChunkKeys = 10000 // non-const for testing
 var defaultCompactBatchLimit = 1000
+var minimumBatchInterval = 10 * time.Millisecond
 
 type StoreConfig struct {
-	CompactionBatchLimit int
+	CompactionBatchLimit    int
+	CompactionSleepInterval time.Duration
 }
 
 type store struct {
@@ -95,6 +94,9 @@ func NewStore(lg *zap.Logger, b backend.Backend, le lease.Lessor, cfg StoreConfi
 	}
 	if cfg.CompactionBatchLimit == 0 {
 		cfg.CompactionBatchLimit = defaultCompactBatchLimit
+	}
+	if cfg.CompactionSleepInterval == 0 {
+		cfg.CompactionSleepInterval = minimumBatchInterval
 	}
 	s := &store{
 		cfg:     cfg,
@@ -234,13 +236,7 @@ func (s *store) updateCompactRev(rev int64) (<-chan struct{}, error) {
 
 	s.compactMainRev = rev
 
-	rbytes := newRevBytes()
-	revToBytes(revision{main: rev}, rbytes)
-
-	tx := s.b.BatchTx()
-	tx.Lock()
-	tx.UnsafePut(buckets.Meta, scheduledCompactKeyName, rbytes)
-	tx.Unlock()
+	SetScheduledCompact(s.b.BatchTx(), rev)
 	// ensure that desired compaction is persisted
 	s.b.ForceCommit()
 
@@ -337,25 +333,20 @@ func (s *store) restore() error {
 	tx := s.b.BatchTx()
 	tx.Lock()
 
-	_, finishedCompactBytes := tx.UnsafeRange(buckets.Meta, finishedCompactKeyName, nil, 0)
-	if len(finishedCompactBytes) != 0 {
+	finishedCompact, found := UnsafeReadFinishedCompact(tx)
+	if found {
 		s.revMu.Lock()
-		s.compactMainRev = bytesToRev(finishedCompactBytes[0]).main
+		s.compactMainRev = finishedCompact
 
 		s.lg.Info(
 			"restored last compact revision",
 			zap.Stringer("meta-bucket-name", buckets.Meta),
-			zap.String("meta-bucket-name-key", string(finishedCompactKeyName)),
+			zap.String("meta-bucket-name-key", string(buckets.FinishedCompactKeyName)),
 			zap.Int64("restored-compact-revision", s.compactMainRev),
 		)
 		s.revMu.Unlock()
 	}
-	_, scheduledCompactBytes := tx.UnsafeRange(buckets.Meta, scheduledCompactKeyName, nil, 0)
-	scheduledCompact := int64(0)
-	if len(scheduledCompactBytes) != 0 {
-		scheduledCompact = bytesToRev(scheduledCompactBytes[0]).main
-	}
-
+	scheduledCompact, _ := UnsafeReadScheduledCompact(tx)
 	// index keys concurrently as they're loaded in from tx
 	keysGauge.Set(0)
 	rkvc, revc := restoreIntoIndex(s.lg, s.kvindex)
@@ -422,7 +413,7 @@ func (s *store) restore() error {
 		s.lg.Info(
 			"resume scheduled compaction",
 			zap.Stringer("meta-bucket-name", buckets.Meta),
-			zap.String("meta-bucket-name-key", string(scheduledCompactKeyName)),
+			zap.String("meta-bucket-name-key", string(buckets.ScheduledCompactKeyName)),
 			zap.Int64("scheduled-compact-revision", scheduledCompact),
 		)
 	}

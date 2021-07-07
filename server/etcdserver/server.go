@@ -62,10 +62,12 @@ import (
 	"go.etcd.io/etcd/server/v3/etcdserver/api/v3alarm"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/v3compactor"
 	"go.etcd.io/etcd/server/v3/etcdserver/cindex"
+	serverversion "go.etcd.io/etcd/server/v3/etcdserver/version"
 	"go.etcd.io/etcd/server/v3/lease"
 	"go.etcd.io/etcd/server/v3/lease/leasehttp"
 	"go.etcd.io/etcd/server/v3/mvcc"
 	"go.etcd.io/etcd/server/v3/mvcc/backend"
+	"go.etcd.io/etcd/server/v3/mvcc/buckets"
 	"go.etcd.io/etcd/server/v3/wal"
 )
 
@@ -293,6 +295,9 @@ type EtcdServer struct {
 	firstCommitInTermC  chan struct{}
 
 	*AccessController
+
+	// Ensure that storage version is updated only once.
+	storageVersionUpdated sync.Once
 }
 
 type backendHooks struct {
@@ -312,7 +317,7 @@ func (bh *backendHooks) OnPreCommitUnsafe(tx backend.BatchTx) {
 	bh.confStateLock.Lock()
 	defer bh.confStateLock.Unlock()
 	if bh.confStateDirty {
-		membership.MustUnsafeSaveConfStateToBackend(bh.lg, tx, &bh.confState)
+		buckets.MustUnsafeSaveConfStateToBackend(bh.lg, tx, &bh.confState)
 		// save bh.confState
 		bh.confStateDirty = false
 	}
@@ -381,7 +386,7 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 	beHooks := &backendHooks{lg: cfg.Logger, indexer: ci}
 	be := openBackend(cfg, beHooks)
 	ci.SetBackend(be)
-	cindex.CreateMetaBucket(be.BatchTx())
+	buckets.CreateMetaBucket(be.BatchTx())
 
 	if cfg.ExperimentalBootstrapDefragThresholdMegabytes != 0 {
 		err := maybeDefragBackend(cfg, be)
@@ -428,7 +433,7 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 		remotes = existingCluster.Members()
 		cl.SetID(types.ID(0), existingCluster.ID())
 		cl.SetStore(st)
-		cl.SetBackend(be)
+		cl.SetBackend(buckets.NewMembershipStore(cfg.Logger, be))
 		id, n, s, w = startNode(cfg, cl, nil)
 		cl.SetID(id, existingCluster.ID())
 
@@ -463,7 +468,7 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 			}
 		}
 		cl.SetStore(st)
-		cl.SetBackend(be)
+		cl.SetBackend(buckets.NewMembershipStore(cfg.Logger, be))
 		id, n, s, w = startNode(cfg, cl, cl.MemberIDs())
 		cl.SetID(id, cl.ID())
 
@@ -533,7 +538,7 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 		}
 
 		cl.SetStore(st)
-		cl.SetBackend(be)
+		cl.SetBackend(buckets.NewMembershipStore(cfg.Logger, be))
 		cl.Recover(api.UpdateCapability)
 		if cl.Version() != nil && !cl.Version().LessThan(semver.Version{Major: 3}) && !beExist {
 			os.RemoveAll(bepath)
@@ -608,10 +613,16 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 		cfg.Logger.Warn("failed to create token provider", zap.Error(err))
 		return nil, err
 	}
-	srv.kv = mvcc.New(srv.Logger(), srv.be, srv.lessor, mvcc.StoreConfig{CompactionBatchLimit: cfg.CompactionBatchLimit})
+
+	mvccStoreConfig := mvcc.StoreConfig{
+		CompactionBatchLimit:    cfg.CompactionBatchLimit,
+		CompactionSleepInterval: cfg.CompactionSleepInterval,
+	}
+	srv.kv = mvcc.New(srv.Logger(), srv.be, srv.lessor, mvccStoreConfig)
 
 	kvindex := ci.ConsistentIndex()
 	srv.lg.Debug("restore consistentIndex", zap.Uint64("index", kvindex))
+
 	if beExist {
 		// TODO: remove kvindex != 0 checking when we do not expect users to upgrade
 		// etcd from pre-3.0 release.
@@ -1303,7 +1314,7 @@ func (s *EtcdServer) applySnapshot(ep *etcdProgress, apply *apply) {
 
 	lg.Info("restored v2 store")
 
-	s.cluster.SetBackend(newbe)
+	s.cluster.SetBackend(buckets.NewMembershipStore(lg, newbe))
 
 	lg.Info("restoring cluster configuration")
 
@@ -2364,6 +2375,12 @@ func (s *EtcdServer) snapshot(snapi uint64, confState raftpb.ConfState) {
 			"saved snapshot",
 			zap.Uint64("snapshot-index", snap.Metadata.Index),
 		)
+		s.storageVersionUpdated.Do(func() {
+			err := serverversion.UpdateStorageVersion(s.lg, s.be.BatchTx())
+			if err != nil {
+				s.lg.Warn("failed to update storage version", zap.Error(err))
+			}
+		})
 
 		// When sending a snapshot, etcd will pause compaction.
 		// After receives a snapshot, the slow follower needs to get all the entries right after
@@ -2424,12 +2441,9 @@ func (s *EtcdServer) ClusterVersion() *semver.Version {
 	return s.cluster.Version()
 }
 
-// monitorVersions checks the member's version every monitorVersionInterval.
-// It updates the cluster version if all members agrees on a higher one.
-// It prints out log if there is a member with a higher version than the
-// local version.
-// TODO switch to updateClusterVersionV3 in 3.6
+// monitorVersions every monitorVersionInterval checks if it's the leader and updates cluster version if needed.
 func (s *EtcdServer) monitorVersions() {
+	monitor := serverversion.NewMonitor(s.Logger(), &serverVersionAdapter{s})
 	for {
 		select {
 		case <-s.FirstCommitInTermNotify():
@@ -2441,31 +2455,7 @@ func (s *EtcdServer) monitorVersions() {
 		if s.Leader() != s.ID() {
 			continue
 		}
-
-		v := decideClusterVersion(s.Logger(), getVersions(s.Logger(), s.cluster, s.id, s.peerRt))
-		if v != nil {
-			// only keep major.minor version for comparison
-			v = &semver.Version{
-				Major: v.Major,
-				Minor: v.Minor,
-			}
-		}
-
-		// if the current version is nil:
-		// 1. use the decided version if possible
-		// 2. or use the min cluster version
-		if s.cluster.Version() == nil {
-			verStr := version.MinClusterVersion
-			if v != nil {
-				verStr = v.String()
-			}
-			s.GoAttach(func() { s.updateClusterVersionV2(verStr) })
-			continue
-		}
-
-		if v != nil && membership.IsValidVersionChange(s.cluster.Version(), v) {
-			s.GoAttach(func() { s.updateClusterVersionV2(v.String()) })
-		}
+		monitor.UpdateClusterVersionIfNeeded()
 	}
 }
 
@@ -2545,12 +2535,13 @@ func (s *EtcdServer) updateClusterVersionV3(ver string) {
 	}
 }
 
+// monitorDowngrade every DowngradeCheckTime checks if it's the leader and cancels downgrade if needed.
 func (s *EtcdServer) monitorDowngrade() {
+	monitor := serverversion.NewMonitor(s.Logger(), &serverVersionAdapter{s})
 	t := s.Cfg.DowngradeCheckTime
 	if t == 0 {
 		return
 	}
-	lg := s.Logger()
 	for {
 		select {
 		case <-time.After(t):
@@ -2561,22 +2552,7 @@ func (s *EtcdServer) monitorDowngrade() {
 		if !s.isLeader() {
 			continue
 		}
-
-		d := s.cluster.DowngradeInfo()
-		if !d.Enabled {
-			continue
-		}
-
-		targetVersion := d.TargetVersion
-		v := semver.Must(semver.NewVersion(targetVersion))
-		if isMatchedVersions(s.Logger(), v, getVersions(s.Logger(), s.cluster, s.id, s.peerRt)) {
-			lg.Info("the cluster has been downgraded", zap.String("cluster-version", targetVersion))
-			ctx, cancel := context.WithTimeout(context.Background(), s.Cfg.ReqTimeout())
-			if _, err := s.downgradeCancel(ctx); err != nil {
-				lg.Warn("failed to cancel downgrade", zap.Error(err))
-			}
-			cancel()
-		}
+		monitor.CancelDowngradeIfNeeded()
 	}
 }
 
